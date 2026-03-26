@@ -20,11 +20,8 @@ from . import models
 
 from . import hypothetical_engine
 
-# The modules below are imported lazily to avoid ImportError while they are
-# still under development.  Uncomment each line once the corresponding file
-# has been added to this package.
-# from . import goat_analysis
-# from . import visualizations
+from . import goat_analysis
+from . import visualizations
 
 __version__ = "1.0.0"
 __author__ = "F1 ML Analytics"
