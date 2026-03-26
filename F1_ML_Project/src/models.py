@@ -557,11 +557,27 @@ def evaluate_model(
     top3_accuracy = float(np.mean(top3_accuracy_scores)) if top3_accuracy_scores else float("nan")
 
     # ── Position regression metrics ──────────────────────────────────────────
-    pred_ranks_arr = np.array(predicted_ranks) if predicted_ranks else np.zeros(len(y_test_pos))
-    # Align lengths (edge case when race_ids has fewer unique values than rows)
-    min_len = min(len(pred_ranks_arr), len(y_test_pos))
-    position_mae = mean_absolute_error(y_test_pos[:min_len], pred_ranks_arr[:min_len])
-    position_r2 = r2_score(y_test_pos[:min_len], pred_ranks_arr[:min_len])
+    if not predicted_ranks:
+        warnings.warn(
+            "[models] No per-race rank data was produced (e.g. all folds had a "
+            "single class). position_mae and position_r2 will be NaN.",
+            UserWarning,
+            stacklevel=2,
+        )
+        position_mae = float("nan")
+        position_r2 = float("nan")
+    else:
+        pred_ranks_arr = np.array(predicted_ranks)
+        min_len = min(len(pred_ranks_arr), len(y_test_pos))
+        if len(pred_ranks_arr) != len(y_test_pos):
+            warnings.warn(
+                f"[models] predicted_ranks length ({len(pred_ranks_arr)}) differs from "
+                f"y_test_pos length ({len(y_test_pos)}); truncating to {min_len} rows.",
+                UserWarning,
+                stacklevel=2,
+            )
+        position_mae = mean_absolute_error(y_test_pos[:min_len], pred_ranks_arr[:min_len])
+        position_r2 = r2_score(y_test_pos[:min_len], pred_ranks_arr[:min_len])
 
     metrics = {
         "roc_auc": roc_auc,
@@ -734,8 +750,12 @@ def build_constructor_season_df(featured_df: pd.DataFrame) -> pd.DataFrame:
 
     df = featured_df.copy()
 
-    # Approximate DNF as position > 20 (positional codes for retirements)
-    df["_is_dnf"] = (df["positionOrder"] > 20).astype(int)
+    # Approximate DNF: position exceeds the field size for that race.
+    # Fall back to >20 only when field_size is unavailable.
+    if "field_size" in df.columns:
+        df["_is_dnf"] = (df["positionOrder"] > df["field_size"]).astype(int)
+    else:
+        df["_is_dnf"] = (df["positionOrder"] > 20).astype(int)
     df["_is_win"] = (df["positionOrder"] == 1).astype(int)
     df["_is_podium"] = (df["positionOrder"] <= 3).astype(int)
 
@@ -755,9 +775,11 @@ def build_constructor_season_df(featured_df: pd.DataFrame) -> pd.DataFrame:
     def _slope(group: pd.DataFrame) -> float:
         rounds = group["season_round"].to_numpy(dtype=float)
         cum_pts = group["points_scored"].cumsum().to_numpy(dtype=float)
-        if len(rounds) < 2:
+        if len(rounds) < 2 or np.ptp(rounds) == 0:
             return 0.0
-        coeffs = np.polyfit(rounds, cum_pts, 1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            coeffs = np.polyfit(rounds, cum_pts, 1)
         return float(coeffs[0])
 
     traj = (
@@ -768,15 +790,15 @@ def build_constructor_season_df(featured_df: pd.DataFrame) -> pd.DataFrame:
     agg = agg.merge(traj, on=["constructorId", "year"], how="left")
 
     # ── Championship position per season ─────────────────────────────────────
-    season_pts = (
-        agg.groupby("year")
-        .apply(lambda g: g.assign(championship_final_pos=g["total_points"].rank(ascending=False).astype(int)))
-        .reset_index(drop=True)
+    # Use transform to rank within each season without dropping the year column
+    agg["championship_final_pos"] = (
+        agg.groupby("year")["total_points"]
+        .rank(ascending=False, method="min")
+        .astype(int)
     )
+    agg["is_champion"] = (agg["championship_final_pos"] == 1).astype(int)
 
-    season_pts["is_champion"] = (season_pts["championship_final_pos"] == 1).astype(int)
-
-    return season_pts.drop(columns=["_is_dnf", "_is_win", "_is_podium"], errors="ignore")
+    return agg.drop(columns=["_is_dnf", "_is_win", "_is_podium"], errors="ignore")
 
 
 def train_constructor_model(constructor_season_df: pd.DataFrame) -> object:
@@ -820,10 +842,14 @@ def train_constructor_model(constructor_season_df: pd.DataFrame) -> object:
         mae = mean_absolute_error(y_test, model.predict(X_test))
         print(f"[models] Constructor model — test MAE: {mae:.3f} championship positions")
 
-    # Attach imputer as attribute for use in prediction
-    model._imputer = imputer  # type: ignore[attr-defined]
-    model._feature_cols = feature_cols  # type: ignore[attr-defined]
-    return model
+    # Bundle estimator with its preprocessing objects so they survive
+    # serialisation / deserialisation as a single unit.
+    bundle = {
+        "model": model,
+        "imputer": imputer,
+        "feature_cols": feature_cols,
+    }
+    return bundle
 
 
 def predict_constructor_championship(
@@ -861,6 +887,20 @@ def predict_constructor_championship(
                 f"No constructor model at '{model_path}'. Train first or pass model= explicitly."
             )
 
+    # Unpack bundle produced by train_constructor_model
+    if isinstance(model, dict):
+        imputer = model["imputer"]
+        feature_cols = model["feature_cols"]
+        estimator = model["model"]
+    else:
+        # Legacy: plain estimator with attached attributes
+        feature_cols = getattr(model, "_feature_cols", [
+            "total_points", "avg_finish", "total_wins",
+            "total_podiums", "total_dnfs", "development_trajectory",
+        ])
+        imputer = getattr(model, "_imputer", SimpleImputer(strategy="median"))
+        estimator = model
+
     # Find matching team row
     mask_year = constructor_season_df["year"] == year
     mask_team = constructor_season_df["constructorId"].str.lower().str.contains(
@@ -871,14 +911,8 @@ def predict_constructor_championship(
     if row.empty:
         raise ValueError(f"No data found for team='{team}', year={year}.")
 
-    feature_cols = getattr(model, "_feature_cols", [
-        "total_points", "avg_finish", "total_wins",
-        "total_podiums", "total_dnfs", "development_trajectory",
-    ])
-    imputer = getattr(model, "_imputer", SimpleImputer(strategy="median"))
-
     X = imputer.transform(row[feature_cols].to_numpy())
-    pred_pos = float(model.predict(X)[0])
+    pred_pos = float(estimator.predict(X)[0])
     pred_pos_int = max(1, round(pred_pos))
 
     # Win probability: soft heuristic from predicted position
@@ -920,8 +954,10 @@ def save_model(model, path: str) -> None:
 
     # ── SHAP explainer ────────────────────────────────────────────────────────
     shap_path = dest.with_suffix(".shap_explainer.pkl")
+    # When the bundle is a dict (constructor model), extract the inner estimator
+    shap_target = model["model"] if isinstance(model, dict) else model
     try:
-        explainer = shap.TreeExplainer(model)
+        explainer = shap.TreeExplainer(shap_target)
         joblib.dump(explainer, shap_path)
         print(f"[models] SHAP explainer saved → {shap_path}")
     except Exception as exc:  # noqa: BLE001
