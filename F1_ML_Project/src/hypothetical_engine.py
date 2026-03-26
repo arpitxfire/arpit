@@ -47,6 +47,21 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+
+# ---------------------------------------------------------------------------
+# Lazy import helper — avoids circular imports and works whether the module
+# is invoked as `src.hypothetical_engine` or directly as `hypothetical_engine`.
+# ---------------------------------------------------------------------------
+
+def _import_model_utils():
+    """Return (FEATURE_COLS, load_model, _DEFAULT_MODEL_DIR) from models module."""
+    try:
+        from src.models import FEATURE_COLS, load_model, _DEFAULT_MODEL_DIR
+    except ImportError:
+        from models import FEATURE_COLS, load_model, _DEFAULT_MODEL_DIR  # type: ignore
+    return FEATURE_COLS, load_model, _DEFAULT_MODEL_DIR
+
+
 # ---------------------------------------------------------------------------
 # F1 Points Systems by Era
 # ---------------------------------------------------------------------------
@@ -733,11 +748,7 @@ def _simulate_single_race(
         return {"win_prob": 0.0, "predicted_position": 20, "dnf_occurred": True}
 
     # ── Build feature matrix ─────────────────────────────────────────────────
-    # Import here to avoid circular imports at module level
-    try:
-        from src.models import FEATURE_COLS
-    except ImportError:
-        from models import FEATURE_COLS  # fallback for direct execution
+    FEATURE_COLS, _, _ = _import_model_utils()
 
     row_data = {col: feature_row.get(col, np.nan) for col in FEATURE_COLS}
     X_df = pd.DataFrame([row_data])
@@ -943,20 +954,20 @@ def hypothetical_scenario(
     driver: str,
     team: str,
     year: int,
-    track: str = None,
-    grid_position_override: int = None,
-    teammate: str = None,
+    track: Optional[str] = None,
+    grid_position_override: Optional[int] = None,
+    teammate: Optional[str] = None,
     weather: str = "dry",
-    num_pit_stops: int = None,
+    num_pit_stops: Optional[int] = None,
     reliability_factor: float = 0.9,
-    season_round: int = None,
-    driver_age_override: int = None,
+    season_round: Optional[int] = None,
+    driver_age_override: Optional[int] = None,
     car_development_rate: float = 0.0,
-    tire_strategy: str = None,
+    tire_strategy: Optional[str] = None,
     starting_championship_points: int = 0,
     driver_confidence_factor: float = 0.5,
-    regulation_era: str = None,
-    num_races_to_simulate: int = None,
+    regulation_era: Optional[str] = None,
+    num_races_to_simulate: Optional[int] = None,
     teammate_skill_level: str = "midfield",
     race_incidents: bool = True,
     home_race: bool = False,
@@ -1092,11 +1103,7 @@ def hypothetical_scenario(
     # ── 1. Optionally load model from disk ────────────────────────────────
     if model is None:
         try:
-            try:
-                from src.models import load_model, _DEFAULT_MODEL_DIR
-            except ImportError:
-                from models import load_model, _DEFAULT_MODEL_DIR  # type: ignore
-
+            _, load_model, _DEFAULT_MODEL_DIR = _import_model_utils()
             model_path = str(_DEFAULT_MODEL_DIR / "race_winner_model.pkl")
             model = load_model(model_path)
             if model is None:
@@ -1214,10 +1221,7 @@ def hypothetical_scenario(
             )
         else:
             # Single deterministic prediction
-            try:
-                from src.models import FEATURE_COLS
-            except ImportError:
-                from models import FEATURE_COLS  # type: ignore
+            FEATURE_COLS, _, _ = _import_model_utils()
 
             row_data = {col: feature_row.get(col, np.nan) for col in FEATURE_COLS}
             X_arr = pd.DataFrame([row_data]).fillna(0.0).to_numpy(dtype=float)

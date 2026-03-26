@@ -18,10 +18,11 @@ from . import data_loader
 from . import feature_engineering
 from . import models
 
+from . import hypothetical_engine
+
 # The modules below are imported lazily to avoid ImportError while they are
 # still under development.  Uncomment each line once the corresponding file
 # has been added to this package.
-# from . import hypothetical_engine
 # from . import goat_analysis
 # from . import visualizations
 
