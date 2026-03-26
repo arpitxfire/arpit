@@ -6,7 +6,7 @@ hypothetical scenario modeling, and GOAT analysis.
 
 Modules:
     data_loader         - Load and merge all 14 F1 CSV files
-    feature_engineering - Compute ~80 ML features with no data leakage
+    feature_engineering - Compute 39 ML features with no data leakage
     models              - Train, tune, and predict with XGBoost/LightGBM/RF
     hypothetical_engine - 20-parameter hypothetical scenario engine
     goat_analysis       - 5-lens GOAT scoring framework

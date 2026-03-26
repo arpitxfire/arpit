@@ -1,7 +1,7 @@
 """
 feature_engineering.py
 -----------------------
-Computes ~80 ML features from the master DataFrame for the F1 ML project.
+Computes 39 ML features from the master DataFrame for the F1 ML project.
 
 Design contract
 ~~~~~~~~~~~~~~~
