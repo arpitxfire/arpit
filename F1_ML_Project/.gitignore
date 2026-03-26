@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+data/raw/
+models/*.pkl
+models/*.joblib
+*.csv
+!data/README.md
